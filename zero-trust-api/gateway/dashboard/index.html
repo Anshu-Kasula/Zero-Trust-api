@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Zero Trust Security Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: "Segoe UI", sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  transition: 0.4s;
+}
+
+body.attack-mode {
+  box-shadow: inset 0 0 300px rgba(255,0,0,0.6);
+}
+
+header {
+  background: #020617;
+  padding: 20px;
+  font-size: 22px;
+  font-weight: bold;
+  text-align: center;
+  border-bottom: 1px solid #1e293b;
+}
+
+#alertBanner {
+  display: none;
+  background: linear-gradient(90deg,#7f1d1d,#ef4444);
+  color: white;
+  padding: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+#alertBanner.flash {
+  animation: flash 0.6s infinite;
+}
+
+@keyframes flash {
+  0% { opacity:1; }
+  50% { opacity:0.3; }
+  100% { opacity:1; }
+}
+
+.container { padding: 20px; }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.card {
+  background: #020617;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 0 15px rgba(0,0,0,0.4);
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.card p {
+  font-size: 34px;
+  margin-top: 10px;
+  font-weight: bold;
+}
+
+.allow { color: #22c55e; }
+.block { color: #ef4444; }
+.log { color: #facc15; }
+
+select.decision-select {
+  padding:6px;
+  border-radius:6px;
+  background:#111827;
+  color:white;
+  border:1px solid #1e293b;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #020617;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 20px;
+}
+
+th, td {
+  padding: 14px;
+  border-bottom: 1px solid #1e293b;
+  font-size: 14px;
+  text-align: center;
+}
+
+th { color: #94a3b8; }
+
+tbody tr:hover {
+  background:#111827;
+}
+
+button.attack-btn {
+  padding:10px 20px;
+  background:#ef4444;
+  color:white;
+  border:none;
+  border-radius:6px;
+  margin-bottom:20px;
+  cursor:pointer;
+  font-weight:bold;
+}
+
+footer {
+  text-align: center;
+  padding: 15px;
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 30px;
+}
+</style>
+</head>
+
+<body>
+
+<header>🔐 Zero Trust API Security Dashboard</header>
+
+<div id="alertBanner">🚨 ALERT</div>
+
+<div class="container">
+
+<button class="attack-btn" onclick="simulateAttack()">🚨 Simulate Attack</button>
+
+<div class="cards">
+  <div class="card"><h3>Total Requests</h3><p id="total">0</p></div>
+  <div class="card"><h3>Allowed</h3><p id="allowed" class="allow">0</p></div>
+  <div class="card"><h3>Blocked</h3><p id="blocked" class="block">0</p></div>
+  <div class="card"><h3>Suspicious</h3><p id="logonly" class="log">0</p></div>
+  <div class="card"><h3>Top Attacking IP</h3><p id="topIp">-</p></div>
+</div>
+
+<div style="display:flex;gap:30px;flex-wrap:wrap;">
+  <div style="width:350px;background:#020617;padding:20px;border-radius:12px;">
+    <canvas id="decisionChart"></canvas>
+  </div>
+  <div style="flex:1;background:#020617;padding:20px;border-radius:12px;">
+    <canvas id="trendChart"></canvas>
+  </div>
+</div>
+
+<h2>Recent Security Events</h2>
+<table>
+<thead>
+<tr>
+<th>Time</th>
+<th>User</th>
+<th>IP</th>
+<th>Endpoint</th>
+<th>Risk</th>
+<th>Decision</th>
+</tr>
+</thead>
+<tbody id="logsTable"></tbody>
+</table>
+
+</div>
+
+<footer>Zero Trust API Security • Final Prototype</footer>
+
+<script>
+
+const ANALYTICS_API = "http://localhost:4000/api/analytics";
+const GATEWAY_API = "http://localhost:3000";
+
+let decisionChart;
+let trendChart;
+let lastAlertId=null;
+
+/* Simulate Attack */
+async function simulateAttack(){
+  for(let i=0;i<30;i++){
+    fetch(`${GATEWAY_API}/api/secure`,{
+      headers:{Authorization:"Bearer invalidtoken"}
+    });
+  }
+}
+
+/* Update Decision (NO reload) */
+async function updateDecision(id,newDecision){
+  const res = await fetch(`${GATEWAY_API}/admin/update-decision/${id}`,{
+    method:"PUT",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ decision:newDecision })
+  });
+
+  const data = await res.json();
+  console.log(data);
+}
+
+/* Load Dashboard */
+async function loadDashboard(){
+  await loadStats();
+  await loadLogs();
+  await loadAlerts();
+  await loadTopIps();
+  await loadTrend();
+}
+
+/* Stats */
+async function loadStats(){
+  const res=await fetch(`${ANALYTICS_API}/decision-stats`);
+  const stats=await res.json();
+
+  let allow=0,block=0,log=0;
+
+  stats.forEach(s=>{
+    if(s._id==="ALLOW") allow=s.count;
+    if(s._id==="BLOCK") block=s.count;
+    if(s._id==="LOG_ONLY") log=s.count;
+  });
+
+  const total=allow+block+log;
+
+  document.getElementById("total").innerText=total;
+  document.getElementById("allowed").innerText=allow;
+  document.getElementById("blocked").innerText=block;
+  document.getElementById("logonly").innerText=log;
+
+  if(block>20){
+    document.body.classList.add("attack-mode");
+  } else {
+    document.body.classList.remove("attack-mode");
+  }
+
+  renderDecisionChart(allow,block,log);
+}
+
+/* Logs */
+async function loadLogs(){
+  const res=await fetch(`${GATEWAY_API}/admin/logs`);
+  const data=await res.json();
+  const logs=data.logs||[];
+
+  const tbody=document.getElementById("logsTable");
+  tbody.innerHTML="";
+
+  logs.forEach(log=>{
+    const row=document.createElement("tr");
+    row.innerHTML=`
+      <td>${new Date(log.timestamp).toLocaleTimeString()}</td>
+      <td>${log.userId || "-"}</td>
+      <td>${log.ip}</td>
+      <td>${log.endpoint}</td>
+      <td>${log.risk_score}</td>
+      <td>
+        <select class="decision-select" onchange="updateDecision('${log._id}',this.value)">
+          <option value="ALLOW" ${log.decision==="ALLOW"?"selected":""}>ALLOW</option>
+          <option value="BLOCK" ${log.decision==="BLOCK"?"selected":""}>BLOCK</option>
+          <option value="LOG_ONLY" ${log.decision==="LOG_ONLY"?"selected":""}>LOG_ONLY</option>
+        </select>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+/* Alerts */
+async function loadAlerts(){
+  const res=await fetch(`${GATEWAY_API}/admin/alerts`);
+  const data=await res.json();
+
+  if(data.alerts && data.alerts.length>0){
+    const latest=data.alerts[0];
+
+    if(latest._id!==lastAlertId){
+      lastAlertId=latest._id;
+
+      const banner=document.getElementById("alertBanner");
+      banner.innerText="🚨 "+latest.message;
+      banner.style.display="block";
+      banner.classList.add("flash");
+
+      setTimeout(()=>{
+        banner.style.display="none";
+        banner.classList.remove("flash");
+      },10000);
+    }
+  }
+}
+
+/* Top IP */
+async function loadTopIps(){
+  const res=await fetch(`${ANALYTICS_API}/top-ips`);
+  const data=await res.json();
+
+  if(data.length>0){
+    document.getElementById("topIp").innerText=
+      data[0]._id+" ("+data[0].count+")";
+  }
+}
+
+/* Chart */
+function renderDecisionChart(a,b,l){
+  const ctx=document.getElementById("decisionChart");
+  if(decisionChart) decisionChart.destroy();
+
+  decisionChart=new Chart(ctx,{
+    type:"pie",
+    data:{
+      labels:["Allowed","Blocked","Suspicious"],
+      datasets:[{
+        data:[a,b,l],
+        backgroundColor:["#22c55e","#ef4444","#facc15"]
+      }]
+    }
+  });
+}
+
+/* Trend */
+async function loadTrend(){
+  const res=await fetch(`${ANALYTICS_API}/requests-trend`);
+  const data=await res.json();
+
+  const labels=data.map(d=>d._id.hour+":00");
+  const counts=data.map(d=>d.count);
+
+  const ctx=document.getElementById("trendChart");
+  if(trendChart) trendChart.destroy();
+
+  trendChart=new Chart(ctx,{
+    type:"line",
+    data:{
+      labels,
+      datasets:[{
+        label:"Requests per Hour",
+        data:counts,
+        borderColor:"#22c55e",
+        backgroundColor:"rgba(34,197,94,0.2)",
+        fill:true
+      }]
+    }
+  });
+}
+
+/* Initial Load */
+loadDashboard();
+
+/* Auto refresh EXCEPT logs */
+setInterval(()=>{
+  loadStats();
+  loadAlerts();
+  loadTopIps();
+  loadTrend();
+},5000);
+
+</script>
+</body>
+</html>

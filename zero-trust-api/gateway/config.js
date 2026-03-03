@@ -1,0 +1,4 @@
+module.exports = {
+  JWT_SECRET: "ZERO_TRUST_FIXED_SECRET_123",
+  TOKEN_EXPIRY_SECONDS: 60 * 60
+};
