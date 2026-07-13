@@ -42,5 +42,5 @@ The project monitors user activity, calculates a risk score, logs important even
 
 ---
 
-##By:<br>
+## By:<br>
 Anshu Kasula
